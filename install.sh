@@ -3,21 +3,24 @@
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
+plain='\033[0m'
 NC='\033[0m'
 
-[[ $EUID -ne 0 ]] && echo "Run as root" && exit 1
+[[ $EUID -ne 0 ]] && echo -e "${RED}Run as root${plain}" && exit 1
 
 SERVICE="/etc/systemd/system/dvhost-tunnel.service"
-START_SCRIPT="/usr/local/bin/dvhost-tunnel.sh"
+RESTORE_SCRIPT="/usr/local/bin/dvhost_restore.sh"
 
-install_requirements(){
-
-apt update -y
-apt install -y socat jq curl
-
+DVHOST_CLOUD_install_jq() {
+    command -v jq >/dev/null || apt-get install jq -y
 }
 
-menu(){
+DVHOST_CLOUD_require_command(){
+    apt update -y
+    apt install -y python3-pip socat jq pv curl
+}
+
+DVHOST_CLOUD_menu(){
 
 clear
 
@@ -25,112 +28,87 @@ SERVER_IP=$(hostname -I | awk '{print $1}')
 SERVER_COUNTRY=$(curl -s ip-api.com/json/$SERVER_IP | jq -r '.country')
 SERVER_ISP=$(curl -s ip-api.com/json/$SERVER_IP | jq -r '.isp')
 
-echo "+------------------------------------------------+"
-echo "            DVHOST Tunnel Manager"
-echo "+------------------------------------------------+"
-echo "Server Country : $SERVER_COUNTRY"
-echo "Server IP      : $SERVER_IP"
-echo "Server ISP     : $SERVER_ISP"
-echo "+------------------------------------------------+"
-echo "1 - Setup Tunnel"
-echo "2 - Remove Tunnel"
-echo "3 - Status"
-echo "0 - Exit"
-echo "+------------------------------------------------+"
+echo "===================================="
+echo "        DVHOST Tunnel Manager"
+echo "===================================="
+echo "Server IP : $SERVER_IP"
+echo "===================================="
+echo -e $1
 
 }
 
-make_persistent(){
+DVHOST_CLOUD_MAIN(){
 
-cat <<EOF > $SERVICE
-[Unit]
-Description=DVHOST Persistent Tunnel
-After=network.target
+DVHOST_CLOUD_menu "1 - Get IPv6
+2 - Setup Tunnel
+3 - Status
+0 - Exit"
 
-[Service]
-Type=simple
-ExecStart=$START_SCRIPT
-Restart=always
-RestartSec=3
+read -p "Choice: " choice
 
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable dvhost-tunnel
-systemctl restart dvhost-tunnel
+case $choice in
+1) DVHOST_CLOUD_GET_LOCAL_IP ;;
+2) DVHOST_CLOUD_TUNNEL ;;
+3) DVHOST_CLOUD_check_status ;;
+0) exit ;;
+esac
 
 }
 
-setup_tunnel(){
+DVHOST_CLOUD_TUNNEL(){
 
-read -p "Enter destination IPv6 address: " dest_ipv6
-read -p "Enter ports (comma-separated): " ports
+DVHOST_CLOUD_menu "1 - Setup Tunnel
+2 - Remove Tunnel
+0 - Exit"
 
-IFS=',' read -r -a port_array <<< "$ports"
+read -p "Choice: " choice
 
-echo "#!/bin/bash" > $START_SCRIPT
-
-echo "ip tunnel del isatap1 2>/dev/null" >> $START_SCRIPT
-echo "ip tunnel add isatap1 mode isatap local $(hostname -I | awk '{print $1}')" >> $START_SCRIPT
-echo "ip link set isatap1 up" >> $START_SCRIPT
-echo "sysctl -w net.ipv6.conf.all.forwarding=1" >> $START_SCRIPT
-
-for port in "${port_array[@]}"; do
-
-pkill -f "socat TCP6-LISTEN:$port" 2>/dev/null
-
-echo "socat TCP6-LISTEN:$port,fork TCP6:[$dest_ipv6]:$port &" >> $START_SCRIPT
-
-done
-
-chmod +x $START_SCRIPT
-
-make_persistent
-
-echo -e "${GREEN}Tunnel Installed + Persistent Enabled${NC}"
+case $choice in
+1) DVHOST_CLOUD_setup_tunnel_and_forward ;;
+2) DVHOST_CLOUD_cleanup_socat_tunnel ;;
+0) exit ;;
+esac
 
 }
 
-remove_tunnel(){
-
-systemctl stop dvhost-tunnel 2>/dev/null
-systemctl disable dvhost-tunnel 2>/dev/null
-
-rm -f $SERVICE
-rm -f $START_SCRIPT
-
-ip tunnel del isatap1 2>/dev/null
-
-systemctl daemon-reload
-
-echo -e "${RED}Tunnel Removed${NC}"
-
-}
-
-status_check(){
+DVHOST_CLOUD_check_status(){
 
 systemctl status dvhost-tunnel --no-pager
 
 }
 
-install_requirements
+DVHOST_CLOUD_GET_LOCAL_IP(){
 
-while true; do
+read -p "Local IPv4: " server1_ip
+read -p "Remote IPv4: " server2_ip
 
-menu
+DVHOST_CLOUD_create_tunnel_and_ping $server1_ip $server2_ip
 
-read -p "Choice: " choice
+}
 
-case $choice in
+DVHOST_CLOUD_create_tunnel_and_ping(){
 
-1) setup_tunnel ;;
-2) remove_tunnel ;;
-3) status_check ;;
-0) exit ;;
-*) echo "Invalid"; sleep 1;;
+local this_server_ip=$1
+local this_hex=$(echo $this_server_ip | awk -F. '{printf("%02x%02x:%02x%02x",$1,$2,$3,$4)}')
+local this_ipv6="fe80::200:5efe:$this_hex"
 
-esac
+ip tunnel del isatap1 2>/dev/null
 
-done
+ip tunnel add isatap1 mode isatap local $this_server_ip
+ip link set isatap1 up
+ip -6 addr add $this_ipv6/64 dev isatap1
+sysctl -w net.ipv6.conf.all.forwarding=1
+
+echo "Tunnel created."
+
+}
+
+DVHOST_CLOUD_setup_tunnel_and_forward(){
+
+read -p "Destination IPv6: " dest_ipv6
+read -p "Ports (comma-separated): " ports
+
+echo "#!/bin/bash" > $RESTORE_SCRIPT
+
+echo "ip tunnel del isatap1 2>/dev/null" >> $RESTORE_SCRIPT
+echo "ip tunnel add isatap1 mode isatap local $(hostname -I | awk '{print
