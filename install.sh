@@ -5,39 +5,46 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 NC='\033[0m'
 
-[[ $EUID -ne 0 ]] && echo -e "${RED}Run as root${NC}" && exit 1
+[[ $EUID -ne 0 ]] && echo "Run as root" && exit 1
 
-SERVICE_FILE="/etc/systemd/system/tunnelx.service"
-START_SCRIPT="/usr/local/bin/tunnelx-start.sh"
+SERVICE="/etc/systemd/system/dvhost-tunnel.service"
+START_SCRIPT="/usr/local/bin/dvhost-tunnel.sh"
 
-install_dep(){
+install_requirements(){
+
 apt update -y
 apt install -y socat jq curl
+
 }
 
 menu(){
 
 clear
-SERVER_IP=$(hostname -I | awk '{print $1}')
 
-echo "===================================="
-echo "        TunnelX Manager"
-echo "===================================="
-echo "Server IP : $SERVER_IP"
-echo "===================================="
+SERVER_IP=$(hostname -I | awk '{print $1}')
+SERVER_COUNTRY=$(curl -s ip-api.com/json/$SERVER_IP | jq -r '.country')
+SERVER_ISP=$(curl -s ip-api.com/json/$SERVER_IP | jq -r '.isp')
+
+echo "+------------------------------------------------+"
+echo "            DVHOST Tunnel Manager"
+echo "+------------------------------------------------+"
+echo "Server Country : $SERVER_COUNTRY"
+echo "Server IP      : $SERVER_IP"
+echo "Server ISP     : $SERVER_ISP"
+echo "+------------------------------------------------+"
 echo "1 - Setup Tunnel"
 echo "2 - Remove Tunnel"
 echo "3 - Status"
 echo "0 - Exit"
-echo "===================================="
+echo "+------------------------------------------------+"
 
 }
 
-create_service(){
+make_persistent(){
 
-cat <<EOF > $SERVICE_FILE
+cat <<EOF > $SERVICE
 [Unit]
-Description=TunnelX Persistent Tunnel
+Description=DVHOST Persistent Tunnel
 After=network.target
 
 [Service]
@@ -51,40 +58,36 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable tunnelx
+systemctl enable dvhost-tunnel
+systemctl restart dvhost-tunnel
 
 }
 
 setup_tunnel(){
 
-read -p "Local IPv4: " LOCAL_IP
-read -p "Remote IPv4: " REMOTE_IP
-read -p "Destination IPv6: " DEST_IPV6
-read -p "Ports (comma separated): " PORTS
+read -p "Enter destination IPv6 address: " dest_ipv6
+read -p "Enter ports (comma-separated): " ports
 
-LOCAL_HEX=$(echo $LOCAL_IP | awk -F. '{printf("%02x%02x:%02x%02x",$1,$2,$3,$4)}')
-
-LOCAL_IPV6="fe80::200:5efe:$LOCAL_HEX"
-
-IFS=',' read -r -a PORT_ARRAY <<< "$PORTS"
+IFS=',' read -r -a port_array <<< "$ports"
 
 echo "#!/bin/bash" > $START_SCRIPT
 
 echo "ip tunnel del isatap1 2>/dev/null" >> $START_SCRIPT
-echo "ip tunnel add isatap1 mode isatap local $LOCAL_IP" >> $START_SCRIPT
+echo "ip tunnel add isatap1 mode isatap local $(hostname -I | awk '{print $1}')" >> $START_SCRIPT
 echo "ip link set isatap1 up" >> $START_SCRIPT
-echo "ip -6 addr add $LOCAL_IPV6/64 dev isatap1" >> $START_SCRIPT
 echo "sysctl -w net.ipv6.conf.all.forwarding=1" >> $START_SCRIPT
 
-for port in "${PORT_ARRAY[@]}"; do
-echo "socat TCP6-LISTEN:$port,fork TCP6:[$DEST_IPV6]:$port &" >> $START_SCRIPT
+for port in "${port_array[@]}"; do
+
+pkill -f "socat TCP6-LISTEN:$port" 2>/dev/null
+
+echo "socat TCP6-LISTEN:$port,fork TCP6:[$dest_ipv6]:$port &" >> $START_SCRIPT
+
 done
 
 chmod +x $START_SCRIPT
 
-create_service
-
-systemctl restart tunnelx
+make_persistent
 
 echo -e "${GREEN}Tunnel Installed + Persistent Enabled${NC}"
 
@@ -92,10 +95,10 @@ echo -e "${GREEN}Tunnel Installed + Persistent Enabled${NC}"
 
 remove_tunnel(){
 
-systemctl stop tunnelx 2>/dev/null
-systemctl disable tunnelx 2>/dev/null
+systemctl stop dvhost-tunnel 2>/dev/null
+systemctl disable dvhost-tunnel 2>/dev/null
 
-rm -f $SERVICE_FILE
+rm -f $SERVICE
 rm -f $START_SCRIPT
 
 ip tunnel del isatap1 2>/dev/null
@@ -106,24 +109,25 @@ echo -e "${RED}Tunnel Removed${NC}"
 
 }
 
-status(){
+status_check(){
 
-systemctl status tunnelx --no-pager
+systemctl status dvhost-tunnel --no-pager
 
 }
 
-install_dep
+install_requirements
 
 while true; do
 
 menu
+
 read -p "Choice: " choice
 
 case $choice in
 
 1) setup_tunnel ;;
 2) remove_tunnel ;;
-3) status ;;
+3) status_check ;;
 0) exit ;;
 *) echo "Invalid"; sleep 1;;
 
