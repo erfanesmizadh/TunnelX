@@ -5,7 +5,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 NC='\033[0m'
 
-# check root
+# Check root
 if [[ $EUID -ne 0 ]]; then
     echo -e "${RED}Fatal error: Please run as root${NC}"
     exit 1
@@ -19,10 +19,10 @@ apt update
 apt install -y socat python3-pip pv
 
 # Menu
+SERVER_IP=$(hostname -I | awk '{print $1}')
 echo "+-----------------------------------------+"
 echo "|       DVHOST Tunnel Manager             |"
 echo "+-----------------------------------------+"
-SERVER_IP=$(hostname -I | awk '{print $1}')
 echo "| Server IP : $SERVER_IP"
 echo "| Country   : Iran"
 echo "| ISP       : Pars Abr Toseeh Ertebatat LTD"
@@ -37,13 +37,14 @@ case $CHOICE in
 1)
     read -p "Destination IPv6: " DEST_IPV6
     read -p "Ports (comma-separated): " PORTS
-
     LOCAL_IP=$(hostname -I | awk '{print $1}')
 
-    # Create restore script
+    # Create restore script for systemd
     cat > $RESTORE_SCRIPT <<EOL
 #!/bin/bash
+# Remove old tunnel if exists
 ip tunnel del isatap1 2>/dev/null
+# Create ISATAP tunnel
 ip tunnel add isatap1 mode isatap local $LOCAL_IP
 ip link set isatap1 up
 sysctl -w net.ipv6.conf.all.forwarding=1
@@ -75,7 +76,7 @@ EOL
     systemctl enable dvhost-tunnel
     systemctl restart dvhost-tunnel
 
-    echo -e "${GREEN}Tunnel persistent enabled ✔${NC}"
+    echo -e "${GREEN}Tunnel setup complete and persistent after reboot!${NC}"
     ;;
 
 2)
@@ -88,7 +89,7 @@ EOL
     done
     ip tunnel del isatap1 2>/dev/null
     systemctl disable --now dvhost-tunnel
-    echo -e "${RED}Tunnel removed${NC}"
+    echo -e "${RED}Tunnel removed and systemd service disabled.${NC}"
     ;;
 
 0)
