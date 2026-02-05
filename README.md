@@ -38,7 +38,7 @@ Dependencies will be installed automatically:
 Clone the project:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/YOUR_REPO.git
+git clone https://github.com/erfanesmizadh/YOUR_REPO.git
 cd YOUR_REPO
 chmod +x tunnel.sh
 bash tunnel.sh
